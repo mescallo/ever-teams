@@ -5,3 +5,4 @@ import { ITimeSheet } from '../interfaces';
 export const timerLogsDailyReportState = atom<ITimerLogsDailyReport[]>([]);
 
 export const timesheetRapportState = atom<ITimeSheet[]>([])
+export const timesheetDeleteState = atom<ITimeSheet[]>([])
