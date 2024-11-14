@@ -3,7 +3,7 @@ import { useAtom } from 'jotai';
 import { timesheetRapportState } from '@/app/stores/time-logs';
 import { useQuery } from '../useQuery';
 import { useCallback, useEffect } from 'react';
-import { getTaskTimesheetLogsApi } from '@/app/services/client/api/timer/timer-log';
+import { deleteTaskTimesheetLogsApi, getTaskTimesheetLogsApi } from '@/app/services/client/api/timer/timer-log';
 import moment from 'moment';
 import { ITimeSheet } from '@/app/interfaces';
 
@@ -16,7 +16,11 @@ export interface GroupedTimesheet {
     date: string;
     tasks: ITimeSheet[];
 }
-
+interface DeleteTimesheetParams {
+    organizationId: string;
+    tenantId: string;
+    logIds: string[];
+}
 
 const groupByDate = (items: ITimeSheet[]): GroupedTimesheet[] => {
     if (!items?.length) return [];
@@ -47,6 +51,8 @@ export function useTimesheet({
     const [timesheet, setTimesheet] = useAtom(timesheetRapportState);
 
     const { loading: loadingTimesheet, queryCall: queryTimesheet } = useQuery(getTaskTimesheetLogsApi);
+    const { loading: loadingDeleteTimesheet, queryCall: queryDeleteTimesheet } = useQuery(deleteTaskTimesheetLogsApi)
+
 
     const getTaskTimesheet = useCallback(
         ({ startDate, endDate }: TimesheetParams) => {
@@ -67,6 +73,40 @@ export function useTimesheet({
         },
         [user, queryTimesheet, setTimesheet]
     );
+
+
+    const handleDeleteTimesheet = async (params: DeleteTimesheetParams) => {
+        try {
+            return await queryDeleteTimesheet(params);
+        } catch (error) {
+            console.error('Error deleting timesheet:', error);
+            throw error;
+        }
+    };
+
+    const deleteTaskTimesheet = useCallback(
+        async ({ logIds }: DeleteTimesheetParams): Promise<void> => {
+            if (!user) {
+                throw new Error('User not authenticated');
+            }
+            if (!logIds.length) {
+                throw new Error('No timesheet IDs provided for deletion');
+            }
+
+            try {
+                await handleDeleteTimesheet({
+                    organizationId: user.employee.organizationId,
+                    tenantId: user.tenantId ?? "",
+                    logIds
+                });
+            } catch (error) {
+                console.error('Failed to delete timesheets:', error);
+                throw error;
+            }
+        },
+        [user, queryDeleteTimesheet]
+    );
+
     useEffect(() => {
         getTaskTimesheet({ startDate, endDate });
     }, [getTaskTimesheet, startDate, endDate]);
@@ -77,5 +117,7 @@ export function useTimesheet({
         loadingTimesheet,
         timesheet: groupByDate(timesheet),
         getTaskTimesheet,
+        loadingDeleteTimesheet,
+        deleteTaskTimesheet
     };
 }
