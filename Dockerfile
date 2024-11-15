@@ -1,68 +1,66 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform - Versión 6
-# Optimizada para evitar problemas con NX y browserslist
+# Ever Teams Platform - Versión 9
+# Bypass NX completamente
 FROM node:20.11.1-slim as deps
 
-WORKDIR /app
+WORKDIR /app/web
 
-# Install build essentials
+# Install essential build tools
 RUN apt-get update -qq && \
-    apt-get install -y build-essential pkg-config python-is-python3 git && \
+    apt-get install -y python3 make g++ git && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Remove yarn and prepare npm
-RUN rm -rf /usr/local/lib/node_modules/yarn && \
-    rm -rf /opt/yarn-* && \
-    rm -rf ~/.yarn && \
-    rm -rf ~/.npm && \
-    npm cache clean --force
-
-# Create and setup web directory
-WORKDIR /app/apps/web
-
-# Update browserslist database first
-RUN npm install -g browserslist && \
-    npx browserslist@latest --update-db
+# Pre-configure npm
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install -g npm@latest
 
 # Copy only web app files
-COPY apps/web/package*.json ./
+COPY apps/web/package.json ./package.json
 
-# Install only web dependencies
-RUN echo "Installing web dependencies..." && \
-    npm install --no-audit --no-fund --legacy-peer-deps && \
-    npm install next@latest
+# Install Next.js and dependencies
+RUN npm install --legacy-peer-deps --no-audit && \
+    npm install next@13.4.19 react@latest react-dom@latest --legacy-peer-deps --no-audit && \
+    npx browserslist@latest --update-db
 
-# Set Next.js standalone mode
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_SHARP_PATH=/app/apps/web/node_modules/sharp
+# Create minimal next.config.js
+RUN echo 'module.exports = {output: "standalone"}' > next.config.js
 
 FROM node:20.11.1-slim as builder
-WORKDIR /app/apps/web
 
-# Copy dependencies and source for web only
-COPY --from=deps /app/apps/web/node_modules ./node_modules
-COPY apps/web/ ./
+WORKDIR /app/web
 
-# Environment variables for build
+# Copy deps and source
+COPY --from=deps /app/web/node_modules ./node_modules
+COPY --from=deps /app/web/next.config.js ./next.config.js
+COPY apps/web ./
+
+# Set build environment
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NX_SKIP_NX_CACHE=true
+ENV NODE_OPTIONS="--max_old_space_size=4096"
+
+# Create pages directory if it doesn't exist
+RUN mkdir -p pages
 
 # Direct Next.js build without NX
-RUN echo "Building web application..." && \
-    node_modules/.bin/next build
+RUN echo "Starting Next.js build..." && \
+    ./node_modules/.bin/next build || \
+    (echo "Build failed, retrying with clean cache..." && \
+    rm -rf .next && \
+    ./node_modules/.bin/next build)
 
 FROM node:20.11.1-slim as runner
+
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy built application
-COPY --from=builder /app/apps/web/.next/standalone ./
-COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=builder /app/apps/web/public ./apps/web/public
+# Copy only the built application
+COPY --from=builder /app/web/.next/standalone ./
+COPY --from=builder /app/web/.next/static ./.next/static
+COPY --from=builder /app/web/public ./public
 
 EXPOSE 3030
 ENV PORT=3030
