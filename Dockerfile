@@ -50,20 +50,18 @@ COPY . .
 # Set environment variables
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NX_DAEMON=false
-ENV NX_CACHE_PROJECT_GRAPH=true
+ENV NX_SKIP_NX_CACHE=true
+ENV NX_CACHE_PROJECT_GRAPH=false
+ENV FORCE_COLOR=true
 
-# Create nx cache directory
-RUN mkdir -p /tmp/nx-cache
-
-# Build with retries
-RUN echo "Starting build process..." && \
+# Initialize NX and build
+RUN echo "Initializing NX..." && \
     npx nx reset && \
-    for i in 1 2 3; do \
-        echo "Build attempt $i/3..." && \
-        npm run build:web || \
-        (echo "Retry build after $i..." && sleep 30 && continue) && break; \
-    done
+    rm -rf .nx && \
+    echo "Starting build process..." && \
+    cd apps/web && \
+    echo "Building web application..." && \
+    npm run build
 
 FROM node:20.11.1-slim as runner
 WORKDIR /app
