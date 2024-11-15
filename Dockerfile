@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform - Versión 5
-# Optimizada para problemas de build y caché
+# Ever Teams Platform - Versión 6
+# Optimizada para evitar problemas con NX y browserslist
 FROM node:20.11.1-slim as deps
 
 WORKDIR /app
@@ -11,45 +11,47 @@ RUN apt-get update -qq && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Remove yarn completely and configure npm
+# Remove yarn and prepare npm
 RUN rm -rf /usr/local/lib/node_modules/yarn && \
     rm -rf /opt/yarn-* && \
     rm -rf ~/.yarn && \
     rm -rf ~/.npm && \
-    npm cache clean --force && \
-    npm config set registry=https://registry.npmmirror.com/ && \
-    npm config set fetch-retries=5 && \
-    npm config set fetch-retry-maxtimeout=60000 && \
-    npm config set timeout=60000
+    npm cache clean --force
 
-# Setup workspace directory
+# Create and setup web directory
 WORKDIR /app/apps/web
 
-# Copy only package files first
-COPY package*.json /app/
+# Update browserslist database first
+RUN npm install -g browserslist && \
+    npx browserslist@latest --update-db
+
+# Copy only web app files
 COPY apps/web/package*.json ./
 
-# Install dependencies directly in web directory
-RUN echo "Installing dependencies..." && \
-    cd /app && npm install --no-audit --no-fund --legacy-peer-deps && \
-    cd /app/apps/web && npm install --no-audit --no-fund --legacy-peer-deps
+# Install only web dependencies
+RUN echo "Installing web dependencies..." && \
+    npm install --no-audit --no-fund --legacy-peer-deps && \
+    npm install next@latest
+
+# Set Next.js standalone mode
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_SHARP_PATH=/app/apps/web/node_modules/sharp
 
 FROM node:20.11.1-slim as builder
-WORKDIR /app
-
-# Copy dependencies and source
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
-COPY . .
-
-# Build directly in web directory
 WORKDIR /app/apps/web
+
+# Copy dependencies and source for web only
+COPY --from=deps /app/apps/web/node_modules ./node_modules
+COPY apps/web/ ./
+
+# Environment variables for build
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_SHARP_PATH=/app/node_modules/sharp
+ENV NX_SKIP_NX_CACHE=true
 
+# Direct Next.js build without NX
 RUN echo "Building web application..." && \
-    npm run build || (echo "Build failed, retrying..." && npm run build)
+    node_modules/.bin/next build
 
 FROM node:20.11.1-slim as runner
 WORKDIR /app
@@ -65,4 +67,4 @@ COPY --from=builder /app/apps/web/public ./apps/web/public
 EXPOSE 3030
 ENV PORT=3030
 
-CMD ["node", "./apps/web/server.js"]
+CMD ["node", "server.js"]
