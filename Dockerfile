@@ -1,111 +1,46 @@
 # syntax = docker/dockerfile:1
+FROM node:20.11.1-slim as deps
 
-# Ever Teams Platform
-
-ARG NODE_VERSION=20.11.1
-ARG NEXT_PUBLIC_GAUZY_API_SERVER_URL=https://api.ever.team
-ARG NEXT_PUBLIC_GA_MEASUREMENT_ID
-ARG NEXT_PUBLIC_CAPTCHA_SITE_KEY
-ARG NEXT_PUBLIC_DISABLE_AUTO_REFRESH=false
-ARG NEXT_PUBLIC_COOKIE_DOMAINS=ever.team
-ARG NEXT_PUBLIC_BOARD_APP_DOMAIN=https://board.ever.team
-ARG NEXT_PUBLIC_BOARD_BACKEND_POST_URL=https://jsonboard.ever.team/api/v2/post/
-ARG NEXT_PUBLIC_BOARD_FIREBASE_CONFIG
-ARG NEXT_PUBLIC_MEET_DOMAIN=https://meet.ever.team
-ARG NEXT_PUBLIC_SENTRY_DSN
-ARG NEXT_PUBLIC_SENTRY_DEBUG
-ARG NEXT_PUBLIC_JITSU_BROWSER_URL
-ARG NEXT_PUBLIC_JITSU_BROWSER_WRITE_KEY
-ARG NEXT_PUBLIC_GITHUB_APP_NAME=ever-github
-ARG NEXT_PUBLIC_CHATWOOT_API_KEY
-
-FROM node:${NODE_VERSION}-slim as base
-
-# Output the environment variable value
-RUN echo "NEXT_PUBLIC_GAUZY_API_SERVER_URL=${NEXT_PUBLIC_GAUZY_API_SERVER_URL}"
-
-LABEL maintainer="ever@ever.co"
-LABEL org.opencontainers.image.source https://github.com/ever-co/ever-teams
-
-# Next.js app lives here
 WORKDIR /app
 
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_BUILD_OUTPUT_TYPE=standalone
-ENV NEXT_SHARP_PATH=/temp/node_modules/sharp
-
-RUN npm i -g npm@latest
-# Install sharp, NextJS image optimization
-RUN mkdir /temp && cd /temp && \
-	npm i sharp
-
-RUN npm cache clean --force
-
-# Throw-away build stage to reduce size of final image
-FROM base as build
-
-# We make env vars passed as build argument to be available in this build stage because we prebuild the NextJs app
-ARG NEXT_PUBLIC_GAUZY_API_SERVER_URL
-ARG NEXT_PUBLIC_GA_MEASUREMENT_ID
-ARG NEXT_PUBLIC_CAPTCHA_SITE_KEY
-ARG NEXT_PUBLIC_DISABLE_AUTO_REFRESH
-ARG NEXT_PUBLIC_COOKIE_DOMAINS
-ARG NEXT_PUBLIC_BOARD_APP_DOMAIN
-ARG NEXT_PUBLIC_BOARD_BACKEND_POST_URL
-ARG NEXT_PUBLIC_BOARD_FIREBASE_CONFIG
-ARG NEXT_PUBLIC_MEET_DOMAIN
-ARG NEXT_PUBLIC_SENTRY_DSN
-ARG NEXT_PUBLIC_SENTRY_DEBUG
-ARG NEXT_PUBLIC_JITSU_BROWSER_URL
-ARG NEXT_PUBLIC_JITSU_BROWSER_WRITE_KEY
-ARG NEXT_PUBLIC_GITHUB_APP_NAME
-ARG NEXT_PUBLIC_CHATWOOT_API_KEY
-
-# Install packages needed to build node modules
+# Install build essentials
 RUN apt-get update -qq && \
-	apt-get install -y build-essential pkg-config python-is-python3
+    apt-get install -y build-essential pkg-config python-is-python3
 
-# Install Yarn
-RUN npm install -g yarn --force
-
-# Install node modules
+# Copy package files
 COPY package.json ./
-COPY yarn.lock ./
-COPY apps/web/package.json ./apps/web/package.json
+COPY apps/web/package.json ./apps/web/
 
-RUN cd apps/web && \
-	yarn install --ignore-scripts
+# Simple npm configuration for better network handling
+RUN npm set registry=https://registry.npmmirror.com/
 
-# Copy application code
+# Install dependencies with basic retry
+RUN echo "Installing dependencies..." && \
+    npm install --legacy-peer-deps --no-audit && \
+    cd apps/web && \
+    npm install --legacy-peer-deps --no-audit
+
+FROM node:20.11.1-slim as builder
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build:web
 
-RUN echo $NEXT_PUBLIC_GAUZY_API_SERVER_URL
-
-# Build application
-RUN yarn run build:web
-
-# Remove development dependencies
-RUN cd apps/web && \
-	yarn install --prod --ignore-scripts
-
-RUN yarn cache clean
-
-
-# Final stage for app image
-FROM base
+FROM node:20.11.1-slim as runner
+WORKDIR /app
 
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy built application
-COPY --from=build /app/apps/web/.next/standalone ./
-COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=build /app/apps/web/public ./apps/web/public
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder /app/apps/web/public ./apps/web/public
 
-# Start the server by default, this can be overwritten at runtime
 EXPOSE 3030
-
 ENV PORT=3030
 
-CMD [ "node", "./apps/web/server.js" ]
+CMD ["node", "./apps/web/server.js"]
