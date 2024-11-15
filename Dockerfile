@@ -9,58 +9,34 @@ RUN apt-get update -qq && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Remove yarn and configure npm
-RUN rm -rf /usr/local/lib/node_modules/yarn && \
-    rm -rf /opt/yarn-* && \
-    rm -rf ~/.yarn && \
-    npm config set registry=https://registry.npmmirror.com/ && \
+# Configure npm
+RUN npm config set registry=https://registry.npmmirror.com/ && \
     npm config set fetch-retries=5 && \
     npm config set fetch-retry-maxtimeout=60000 && \
     npm config set timeout=60000
 
-# Copy package files
+# Copy only necessary files
 COPY package*.json ./
 COPY apps/web/package*.json ./apps/web/
 
-# Install dependencies with retries
-RUN npm cache clean --force && \
-    echo "Installing dependencies..." && \
-    for i in 1 2 3 4 5; do \
-        echo "Attempt $i/5..." && \
-        npm install --no-audit --no-fund --legacy-peer-deps || \
-        (echo "Retry after $i..." && sleep 30 && continue) && break; \
-    done && \
-    cd apps/web && \
-    for i in 1 2 3 4 5; do \
-        echo "Installing web dependencies attempt $i/5..." && \
-        npm install --no-audit --no-fund --legacy-peer-deps || \
-        (echo "Retry after $i..." && sleep 30 && continue) && break; \
-    done
-
-# Update browserslist database
-RUN npx update-browserslist-db@latest
+# Install dependencies
+RUN cd apps/web && \
+    echo "Installing web dependencies..." && \
+    npm install --no-audit --no-fund --legacy-peer-deps
 
 FROM node:20.11.1-slim as builder
 WORKDIR /app
 
-# Copy node_modules and source
-COPY --from=deps /app/node_modules ./node_modules
+# Copy dependencies and source
+COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY . .
 
-# Set environment variables
+# Build directly in web directory
+WORKDIR /app/apps/web
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NX_SKIP_NX_CACHE=true
-ENV NX_CACHE_PROJECT_GRAPH=false
-ENV FORCE_COLOR=true
 
-# Initialize NX and build
-RUN echo "Initializing NX..." && \
-    npx nx reset && \
-    rm -rf .nx && \
-    echo "Starting build process..." && \
-    cd apps/web && \
-    echo "Building web application..." && \
+RUN echo "Building web application..." && \
     npm run build
 
 FROM node:20.11.1-slim as runner
