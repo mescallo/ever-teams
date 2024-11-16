@@ -1,18 +1,18 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform - Version 12
-# Optimizado para: Ubuntu 20.04, 4 CPUs, 5.8GB RAM
-# Enfoque: Estabilidad de red y npm
+# Ever Teams Platform - Version 13
+# Enfoque: Estabilidad de red con NPM puro
 
-FROM node:20.11.1-slim as deps
+FROM node:20.11.1-bullseye as deps
 
-# Configuración de recursos y telemetría
+# Configuración de recursos
 ENV NODE_OPTIONS="--max_old_space_size=2048"
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_SHARP_PATH=/tmp/node_modules/sharp
+ENV NPM_CONFIG_LOGLEVEL=verbose
 
 WORKDIR /app
 
-# Instalar dependencias del sistema
+# Remover yarn e instalar dependencias del sistema
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -20,54 +20,57 @@ RUN apt-get update -qq && \
     python-is-python3 \
     git \
     ca-certificates \
+    wget \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules/yarn \
+    && rm -rf /opt/yarn* \
+    && rm -rf ~/.yarn
 
-# Configurar npm para mejor manejo de red
+# Configurar NPM
 RUN npm i -g npm@latest && \
-    npm config set registry https://registry.npmmirror.com && \
-    npm config set fetch-retries 5 && \
-    npm config set fetch-retry-mintimeout 60000 && \
-    npm config set fetch-retry-maxtimeout 180000 && \
-    npm config set prefer-offline true && \
-    npm config set timeout 300000
+    npm cache clean --force && \
+    npm config set registry=https://registry.npmmirror.com && \
+    npm config set fetch-retries=5 && \
+    npm config set fetch-retry-mintimeout=60000 && \
+    npm config set fetch-retry-maxtimeout=180000 && \
+    npm config set prefer-offline=true && \
+    npm config set timeout=300000
 
-# Preparar sharp para Next.js
+# Preparar sharp
 RUN mkdir -p /tmp && cd /tmp && \
-    for i in 1 2 3; do \
-        echo "Intento de instalación sharp $i/3" && \
-        npm install sharp --no-audit --no-fund && \
-        break || \
-        echo "Reintentando en 30s..." && \
-        npm cache clean --force && \
-        sleep 30; \
-    done
+    npm install sharp --no-package-lock
 
-# Copiar archivos de package
+# Copiar solo package.json
 COPY package*.json ./
 COPY apps/web/package*.json ./apps/web/
 
 # Instalar dependencias con reintentos
 RUN cd apps/web && \
     for i in 1 2 3 4 5; do \
-        echo "Intento de instalación $i/5" && \
-        npm install --no-audit --no-fund --legacy-peer-deps --prefer-offline && \
-        break || \
-        echo "Reintentando en 45s..." && \
-        npm cache clean --force && \
-        sleep 45; \
+        echo "=== Intento de instalación $i/5 ===" && \
+        PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+        npm install --prefer-offline --no-audit --no-fund --legacy-peer-deps && \
+        if [ $? -eq 0 ]; then \
+            echo "Instalación exitosa!" && \
+            break; \
+        else \
+            echo "Fallo en intento $i. Limpiando y reintentando en 60s..." && \
+            npm cache clean --force && \
+            sleep 60; \
+        fi; \
     done
 
-FROM node:20.11.1-slim as builder
+FROM node:20.11.1-bullseye as builder
 
 WORKDIR /app
 
-# Copiar dependencias y código fuente
+# Copiar dependencias y código
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /tmp/node_modules/sharp ./node_modules/sharp
 COPY . .
 
-# Variables de entorno para el build
+# Configuración de build
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_OPTIONS="--max_old_space_size=2048"
@@ -75,38 +78,27 @@ ENV NODE_OPTIONS="--max_old_space_size=2048"
 # Build con reintentos
 RUN cd apps/web && \
     for i in 1 2 3 4 5; do \
-        echo "Intento de build $i/5" && \
+        echo "=== Intento de build $i/5 ===" && \
         npm run build && \
-        break || \
-        echo "Reintentando build en 45s..." && \
-        rm -rf .next && \
-        npm cache clean --force && \
-        sleep 45; \
+        if [ $? -eq 0 ]; then \
+            echo "Build exitoso!" && \
+            break; \
+        else \
+            echo "Fallo en build $i. Limpiando y reintentando en 60s..." && \
+            rm -rf .next && \
+            npm cache clean --force && \
+            sleep 60; \
+        fi; \
     done
 
-FROM node:20.11.1-slim as runner
+FROM node:20.11.1-bullseye-slim as runner
 
 WORKDIR /app
 
-# Variables de entorno para producción
+# Configuración de producción
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3030
 
 # Copiar aplicación compilada
-COPY --from=builder /app/apps/web/.next/standalone ./
-COPY --from=builder /app/apps/web/.next/static ./.next/static
-COPY --from=builder /app/apps/web/public ./public
-
-# Configuración de salud
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3030 || exit 1
-
-# Etiquetas informativas
-LABEL version="12.0.0"
-LABEL description="Ever Teams Platform - Optimized for network stability"
-LABEL maintainer="ever@ever.co"
-
-EXPOSE 3030
-
-CMD ["node", "server.js"]
+COPY --from
