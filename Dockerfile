@@ -1,18 +1,18 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform - Version 14
-# Optimizado para estabilidad de red y npm
+# Ever Teams Platform - Version 15
+# Optimizado para redes inestables usando pnpm
 
 FROM node:20.11.1-bullseye as deps
 
-# Configuración de entorno y recursos
+# Configuración de entorno
 ENV NODE_OPTIONS="--max_old_space_size=2048"
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_SHARP_PATH=/temp/node_modules/sharp
-ENV NPM_CONFIG_LOGLEVEL=verbose
+ENV PNPM_HOME="/root/.local/share/pnpm"
+ENV PATH="${PNPM_HOME}:${PATH}"
 
 WORKDIR /app
 
-# Instalación de dependencias base
+# Instalar dependencias del sistema
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -20,51 +20,44 @@ RUN apt-get update -qq && \
     python-is-python3 \
     git \
     ca-certificates \
-    wget \
     curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     rm -rf /usr/local/lib/node_modules/yarn && \
-    rm -rf /opt/yarn* && \
-    rm -rf ~/.yarn
+    npm uninstall -g yarn && \
+    npm cache clean --force
 
-# Configuración de npm
-RUN npm i -g npm@latest && \
-    npm config set registry=https://registry.npmmirror.com && \
-    npm config set fetch-retries=5 && \
-    npm config set fetch-retry-mintimeout=60000 && \
-    npm config set fetch-retry-maxtimeout=180000 && \
-    npm config set prefer-offline=true && \
-    npm config set timeout=300000
+# Instalar pnpm
+RUN curl -fsSL https://get.pnpm.io/install.sh | sh - && \
+    pnpm config set registry https://registry.npmmirror.com && \
+    pnpm config set network-timeout 300000 && \
+    pnpm config set fetch-retries 5 && \
+    pnpm config set strict-ssl false && \
+    pnpm setup
 
-# Instalación de sharp
+# Preparar sharp
 RUN mkdir -p /temp && cd /temp && \
-    for i in 1 2 3; do \
-        echo "Intento de instalación de sharp $i/3" && \
-        npm install sharp --no-audit --no-fund && break || \
-        sleep 15; \
-    done
+    pnpm add sharp
 
-# Copia e instalación de dependencias web
-COPY package*.json ./
-COPY apps/web/package*.json ./apps/web/
+# Copiar archivos de package
+COPY package.json pnpm-lock.yaml* ./
+COPY apps/web/package.json ./apps/web/
 
-# Instalación de dependencias con reintentos
+# Instalar dependencias
 RUN cd apps/web && \
     for i in 1 2 3 4 5; do \
         echo "=== Intento de instalación $i/5 ===" && \
-        PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-        npm install --prefer-offline --no-audit --no-fund --legacy-peer-deps && break || \
-        echo "Reintento en 60s..." && \
-        npm cache clean --force && \
-        sleep 60; \
+        pnpm install --offline-first --strict-peer-dependencies=false && break || \
+        echo "Reintentando en 45s..." && \
+        pnpm store prune && \
+        sleep 45; \
     done
 
 FROM node:20.11.1-bullseye as builder
 
 WORKDIR /app
 
-# Copiar dependencias y código fuente
+# Copiar archivos necesarios
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /temp/node_modules/sharp ./node_modules/sharp
 COPY . .
@@ -79,9 +72,9 @@ RUN cd apps/web && \
     for i in 1 2 3 4 5; do \
         echo "=== Intento de build $i/5 ===" && \
         NODE_ENV=production npm run build && break || \
-        echo "Reintento en 60s..." && \
+        echo "Reintentando en 45s..." && \
         rm -rf .next && \
-        sleep 60; \
+        sleep 45; \
     done
 
 FROM node:20.11.1-bullseye-slim as runner
@@ -98,13 +91,13 @@ COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./.next/static
 COPY --from=builder /app/apps/web/public ./public
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=30s --start-period=30s --retries=3 \
-    CMD wget --no-verbose --tries=3 --spider http://localhost:3030 || exit 1
+# Healthcheck más tolerante
+HEALTHCHECK --interval=45s --timeout=45s --start-period=45s --retries=3 \
+    CMD curl --fail http://localhost:3030 || exit 1
 
 # Metadatos
-LABEL version="14.0.0"
-LABEL description="Ever Teams Platform - Optimized for network stability"
+LABEL version="15.0.0"
+LABEL description="Ever Teams Platform - PNPM based build"
 LABEL maintainer="ever@ever.co"
 
 EXPOSE 3030
