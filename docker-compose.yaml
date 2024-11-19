@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+
+  web:
+    build:
+      context: .
+      target: runner
+    ports:
+      - 3030:3030
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - PORT=3030
+    command: ["node", "server.js"]
