@@ -1,5 +1,5 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform v16.1.0 - 2024 (Offline Build)
+# Ever Teams Platform v16.1.0 - 2024 (Offline Build) marcelo
 
 FROM node:20.11.1-bullseye as deps
 WORKDIR /app
@@ -12,32 +12,24 @@ ENV API_URL=https://api.teams.canvasia.co
 ENV NEXTAUTH_URL=https://teams.canvasia.co
 ENV GAUZY_API_SERVER_URL=https://api.teams.canvasia.co
 
-# Configurar npm para modo offline
-RUN npm config set offline true
-
-# Copiar cache y paquetes pre-descargados
-COPY /root/ever-teams-offline/npm-cache /root/.npm/_cacache
-COPY /root/ever-teams-offline/packages /tmp/packages
-
-# Instalar paquetes del cache local
-RUN cd /tmp/packages && \
-    for package in *.tgz; do \
-        npm install --global --offline --no-audit --no-save $package; \
-    done
+# Configurar yarn para modo offline
+COPY /root/ever-teams-offline/packages /usr/local/share/.cache/yarn/v6/
+RUN yarn config set yarn-offline-mirror /usr/local/share/.cache/yarn/v6 && \
+    yarn config set yarn-offline-mirror-pruning true && \
+    yarn config set offline true
 
 COPY package*.json ./
 COPY apps/web/package*.json ./apps/web/
 
-# Instalación offline
+# Instalación completamente offline
 RUN cd apps/web && \
-    npm install \
+    YARN_CACHE_FOLDER=/usr/local/share/.cache/yarn/v6 \
+    yarn install \
         --offline \
-        --no-registry \
-        --prefer-offline \
-        --legacy-peer-deps \
+        --frozen-lockfile \
         --ignore-scripts \
-        --no-audit \
-        --cache=/root/.npm/_cacache
+        --prefer-offline \
+        --no-progress
 
 FROM node:20.11.1-bullseye as builder
 WORKDIR /app
@@ -50,15 +42,13 @@ ENV API_URL=https://api.teams.canvasia.co
 ENV NEXTAUTH_URL=https://teams.canvasia.co
 ENV GAUZY_API_SERVER_URL=https://api.teams.canvasia.co
 
-# Copiar módulos y dependencias
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY . .
 
-# Build offline
 RUN cd apps/web && \
+    YARN_CACHE_FOLDER=/usr/local/share/.cache/yarn/v6 \
     NODE_ENV=production \
-    npm run build --offline
+    yarn build --offline
 
 FROM node:20.11.1-bullseye-slim as runner
 WORKDIR /app
