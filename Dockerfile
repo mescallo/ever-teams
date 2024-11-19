@@ -1,5 +1,19 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform v16.1.0 - 2024
+# Ever Teams Platform v16.1.0 - 2024 (Offline Build)
+FROM node:20.11.1-bullseye as downloader
+WORKDIR /downloads
+
+# Instalar herramientas necesarias
+RUN apt-get update && \
+   apt-get install -y curl wget git
+
+# Descargar paquetes críticos
+RUN mkdir -p packages && cd packages && \
+   wget https://registry.npmmirror.com/date-fns/-/date-fns-2.30.0.tgz && \
+   wget https://registry.npmmirror.com/rxjs/-/rxjs-7.8.1.tgz && \
+   wget https://registry.npmmirror.com/@nrwl/next/-/next-16.8.1.tgz && \
+   wget https://registry.npmmirror.com/next/-/next-13.4.19.tgz
+
 FROM node:20.11.1-bullseye as deps
 WORKDIR /app
 
@@ -11,52 +25,34 @@ ENV API_URL=https://api.teams.canvasia.co
 ENV NEXTAUTH_URL=https://teams.canvasia.co
 ENV GAUZY_API_SERVER_URL=https://api.teams.canvasia.co
 
-RUN npm config set registry https://registry.npmmirror.com && \
-   npm config set network-timeout 1000000 && \
-   yarn config set network-timeout 1000000 && \
-   yarn config set registry https://registry.npmmirror.com && \
-   npm config set sharp_binary_host "https://npmmirror.com/mirrors/sharp" && \
-   npm config set sharp_libvips_binary_host "https://npmmirror.com/mirrors/sharp-libvips" && \
-   npm config set puppeteer_download_host "https://npmmirror.com/mirrors" && \
-   npm config set electron_mirror "https://npmmirror.com/mirrors/electron/" && \
-   npm config set sass_binary_site "https://npmmirror.com/mirrors/node-sass" && \
-   npm install -g npm@latest
+# Copiar paquetes pre-descargados
+COPY --from=downloader /downloads/packages /tmp/packages
 
-RUN apt-get update -qq && \
-   apt-get install -y --no-install-recommends \
-   build-essential \
-   pkg-config \
-   python-is-python3 \
-   git \
-   ca-certificates \
-   curl && \
-   apt-get clean && \
-   rm -rf /var/lib/apt/lists/*
+# Preparar cache npm
+RUN mkdir -p /root/.npm/_cacache && \
+   cd /tmp/packages && \
+   for package in *.tgz; do \
+       npm cache add $(pwd)/$package; \
+   done
 
-# Pre-descargar paquetes críticos
+# Instalar paquetes críticos
 RUN cd /tmp && \
-   curl -L -o date-fns.tgz https://registry.npmmirror.com/date-fns/-/date-fns-2.30.0.tgz && \
-   npm install /tmp/date-fns.tgz && \
-   curl -L -o rxjs.tgz https://registry.npmmirror.com/rxjs/-/rxjs-7.8.1.tgz && \
-   mkdir -p node_modules/rxjs && \
-   tar -xzf rxjs.tgz -C node_modules/rxjs
+   npm install \
+       ./packages/date-fns-2.30.0.tgz \
+       ./packages/rxjs-7.8.1.tgz \
+       ./packages/next-13.4.19.tgz \
+       ./packages/@nrwl-next-16.8.1.tgz
 
 COPY package*.json ./
 COPY apps/web/package*.json ./apps/web/
 
+# Instalación offline
 RUN cd apps/web && \
-   for i in 1 2 3 4 5; do \
-       echo "=== Intento de instalación $i/5 ===" && \
-       YARN_NETWORK_TIMEOUT=1000000 yarn install \
-           --network-timeout 1000000 \
-           --prefer-offline \
-           --frozen-lockfile \
-           --network-concurrency 1 \
-           --no-audit \
-           --ignore-scripts && break || \
-       echo "Reintentando en 30s..." && \
-       sleep 30; \
-   done
+   npm install \
+       --prefer-offline \
+       --no-registry \
+       --legacy-peer-deps \
+       --ignore-scripts
 
 FROM node:20.11.1-bullseye as builder
 WORKDIR /app
@@ -70,8 +66,7 @@ ENV NEXTAUTH_URL=https://teams.canvasia.co
 ENV GAUZY_API_SERVER_URL=https://api.teams.canvasia.co
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /tmp/node_modules/date-fns ./node_modules/date-fns
-COPY --from=deps /tmp/node_modules/rxjs ./node_modules/rxjs
+COPY --from=deps /tmp/node_modules ./node_modules
 COPY . .
 
 RUN cd apps/web && npm run build
@@ -96,5 +91,5 @@ EXPOSE 3030
 CMD ["node", "server.js"]
 
 LABEL version="16.1.0"
-LABEL description="Ever Teams Platform - Optimizado para Coolify"
+LABEL description="Ever Teams Platform - Build Offline Optimizado"
 LABEL maintainer="aulneau@canvasia.co"
