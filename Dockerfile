@@ -1,5 +1,6 @@
 # syntax = docker/dockerfile:1
-# Ever Teams Platform v16.1.0 - 2024 (Pre-cached Build)
+# Ever Teams Platform v16.1.0 - 2024 (Offline Build)
+
 FROM node:20.11.1-bullseye as deps
 WORKDIR /app
 
@@ -11,22 +12,32 @@ ENV API_URL=https://api.teams.canvasia.co
 ENV NEXTAUTH_URL=https://teams.canvasia.co
 ENV GAUZY_API_SERVER_URL=https://api.teams.canvasia.co
 
-# Usar el cache pre-descargado
-COPY /tmp/ever-teams-cache /root/.npm/_cacache
+# Configurar npm para modo offline
+RUN npm config set offline true
+
+# Copiar cache y paquetes pre-descargados
+COPY /root/ever-teams-offline/npm-cache /root/.npm/_cacache
+COPY /root/ever-teams-offline/packages /tmp/packages
+
+# Instalar paquetes del cache local
+RUN cd /tmp/packages && \
+    for package in *.tgz; do \
+        npm install --global --offline --no-audit --no-save $package; \
+    done
 
 COPY package*.json ./
 COPY apps/web/package*.json ./apps/web/
 
-# Instalación usando cache pre-descargado
+# Instalación offline
 RUN cd apps/web && \
     npm install \
+        --offline \
+        --no-registry \
         --prefer-offline \
-        --cache=/root/.npm/_cacache \
         --legacy-peer-deps \
         --ignore-scripts \
         --no-audit \
-        --fetch-timeout=600000 \
-        --network-timeout=600000
+        --cache=/root/.npm/_cacache
 
 FROM node:20.11.1-bullseye as builder
 WORKDIR /app
@@ -39,12 +50,15 @@ ENV API_URL=https://api.teams.canvasia.co
 ENV NEXTAUTH_URL=https://teams.canvasia.co
 ENV GAUZY_API_SERVER_URL=https://api.teams.canvasia.co
 
+# Copiar módulos y dependencias
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY . .
 
+# Build offline
 RUN cd apps/web && \
     NODE_ENV=production \
-    npm run build
+    npm run build --offline
 
 FROM node:20.11.1-bullseye-slim as runner
 WORKDIR /app
@@ -66,5 +80,5 @@ EXPOSE 3030
 CMD ["node", "server.js"]
 
 LABEL version="16.1.0"
-LABEL description="Ever Teams Platform - Pre-cached Build"
+LABEL description="Ever Teams Platform - Offline Build"
 LABEL maintainer="aulneau@canvasia.co"
